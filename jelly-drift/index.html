@@ -6,121 +6,155 @@
     <title>Unity WebGL Player | Jelly Drift</title>
 
     <script src="Build/UnityLoader.js"></script>
-      		<style>
-			* {
-				margin: 0;
-				padding: 0;
-				border: 0;
-				overflow: hidden;
-			}
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
 
-			body {
-				background: #000;
-				position: fixed;
-				width: 100%;
-				height: 100%;
-			}
+      /* avoid forcing unnecessary reflow / layout work */
+      html, body {
+        width: 100%;
+        height: 100%;
+      }
 
-			#unityContainer {
-				position: absolute;
-				width: 100%;
-				height: 100%;
-			}
-		</style>
-<script>
-			let max = 0;
-			let done = 0;
-			function mergeFiles(fileParts) {
-				return new Promise((resolve, reject) => {
-					let buffers = [];
+      body {
+        background: #000;
+        position: fixed;
+        width: 100%;
+        height: 100%;
+      }
 
-					function fetchPart(index) {
-						if (index >= fileParts.length) {
-							let mergedBlob = new Blob(buffers);
-							let mergedFileUrl = URL.createObjectURL(mergedBlob);
-							resolve(mergedFileUrl);
-							return;
-						}
-						fetch(fileParts[index])
-							.then((response) => response.arrayBuffer())
-							.then((data) => {
-								buffers.push(data);
-								done = done+1;
-								document.querySelector("#loading-text").textContent = `LOADING... (${done}/${max})`;
-								fetchPart(index + 1);
-							})
-							.catch(reject);
-					}
-					fetchPart(0);
-				});
-			}
+      #unityContainer {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        /* hint to the browser that this element will be animated/painted */
+        will-change: transform, opacity;
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+      }
+    </style>
+    <script>
+      // track total number of parts to show progress
+      let max = 0;
+      let done = 0;
 
-			function getParts(file, start, end) {
-				let parts = [];
-				for (let i = start; i <= end; i++) {
-					parts.push(file + ".part" + i);
-				}
-				max = max+end;
-				return parts;
-			}
+      // fetch and merge parts in parallel, preserving order
+      function mergeFiles(fileParts) {
+        // fileParts: ["Build/jellydrift.data.unityweb.part1", ...]
+        return new Promise((resolve, reject) => {
+          // map to fetch promises that return ArrayBuffer
+          const fetchPromises = fileParts.map((url, idx) =>
+            fetch(url)
+              .then(response => {
+                if (!response.ok) throw new Error("Failed to fetch " + url + " (" + response.status + ")");
+                return response.arrayBuffer();
+              })
+              .then(buffer => ({ idx, buffer }))
+          );
 
-			function resizeUnityContainer() {
-				var container = document.getElementById("unityContainer");
-				container.style.width = window.innerWidth + "px";
-				container.style.height = window.innerHeight + "px";
-			}
-			Promise.all([
-				mergeFiles(getParts("Build/jellydrift.data.unityweb", 1, 3)),
-        mergeFiles(getParts("Build/jellydrift.wasm.code.unityweb", 1, 2)),
-			]).then(([dataUrl, wasmurl]) => {
-				window.dataUrll = dataUrl;
+          // run all fetches in parallel
+          Promise.all(fetchPromises)
+            .then(results => {
+              // sort by original index (in case fetches completed out of order)
+              results.sort((a, b) => a.idx - b.idx);
+
+              // update progress counters: done -> max
+              // (we update done here to reflect that all parts are now ready)
+              done += results.length;
+              document.querySelector("#loading-text").textContent = `LOADING... (${done}/${max})`;
+
+              // collect buffers in order and create a single Blob
+              const buffers = results.map(r => r.buffer);
+              const mergedBlob = new Blob(buffers);
+              const mergedFileUrl = URL.createObjectURL(mergedBlob);
+              resolve(mergedFileUrl);
+            })
+            .catch(err => {
+              reject(err);
+            });
+        });
+      }
+
+      // produce list of part filenames and update max correctly
+      function getParts(file, start, end) {
+        let parts = [];
+        for (let i = start; i <= end; i++) {
+          parts.push(file + ".part" + i);
+        }
+        // add the number of parts added for progress calculation
+        max += (end - start + 1);
+        return parts;
+      }
+
+      function resizeUnityContainer() {
+        var container = document.getElementById("unityContainer");
+        container.style.width = window.innerWidth + "px";
+        container.style.height = window.innerHeight + "px";
+      }
+
+      // Use parallel merging for both data and wasm code parts.
+      // Adjust ranges if different in your build.
+      Promise.all([
+        mergeFiles(getParts("Build/jellydrift.data.unityweb", 1, 3)),
+        mergeFiles(getParts("Build/jellydrift.wasm.code.unityweb", 1, 2))
+      ]).then(([dataUrl, wasmurl]) => {
+        window.dataUrll = dataUrl;
         window.wasmurll = wasmurl;
-				var json = {
-"companyName": "Dani",
-"productName": "Jelly Drift",
-"productVersion": "0.4",
-"dataUrl": dataUrl,
-"wasmCodeUrl": wasmurl,
-"wasmFrameworkUrl": "jellydrift.wasm.framework.js",
-"graphicsAPI": ["WebGL 2.0"],
-"webglContextAttributes": {"preserveDrawingBuffer": false},
-"splashScreenStyle": "Dark",
-"backgroundColor": "#231F20",
-"developmentBuild": false,
-"multithreading": false,
-"unityVersion": "2019.4.19f1"
-};
-				let blob = new Blob([JSON.stringify(json)], {
-					type: "application/json",
-				});
-				let blobUrl = URL.createObjectURL(blob);
-				window.addEventListener("resize", resizeUnityContainer);
-				UnityLoader.instantiate("unityContainer", json, {
-					url: blobUrl,
-					Module: {
-						onRuntimeInitialized: function () {
-							resizeUnityContainer();
-							document.querySelector("#loading-text").remove();
-						},
-					},
-				});
-			});
-		</script>
+
+        var json = {
+          "companyName": "Dani",
+          "productName": "Jelly Drift",
+          "productVersion": "0.4",
+          "dataUrl": dataUrl,
+          "wasmCodeUrl": wasmurl,
+          "wasmFrameworkUrl": "jellydrift.wasm.framework.js",
+          "graphicsAPI": ["WebGL 2.0"],
+          "webglContextAttributes": {"preserveDrawingBuffer": false},
+          "splashScreenStyle": "Dark",
+          "backgroundColor": "#231F20",
+          "developmentBuild": false,
+          "multithreading": false,
+          "unityVersion": "2019.4.19f1"
+        };
+
+        let blob = new Blob([JSON.stringify(json)], { type: "application/json" });
+        let blobUrl = URL.createObjectURL(blob);
+
+        window.addEventListener("resize", resizeUnityContainer);
+        UnityLoader.instantiate("unityContainer", json, {
+          url: blobUrl,
+          Module: {
+            onRuntimeInitialized: function () {
+              resizeUnityContainer();
+              const lt = document.querySelector("#loading-text");
+              if (lt) lt.remove();
+            }
+          }
+        });
+      }).catch(err => {
+        console.error("Error merging files:", err);
+        const lt = document.querySelector("#loading-text");
+        if (lt) lt.textContent = "Failed to load. See console.";
+      });
+    </script>
   </head>
   <body>
     <div class="webgl-content">
-      			<div
-				id="loading-text"
-				style="
-					color: white;
-					font-size: 48px;
-					font-family: cursive;
-					text-align: center;
-					margin-top: 20px;
-				"
-			>
-				LOADING...
-			</div>
+      <div
+        id="loading-text"
+        style="
+          color: white;
+          font-size: 48px;
+          font-family: cursive;
+          text-align: center;
+          margin-top: 20px;
+        "
+      >
+        LOADING...
+      </div>
       <div id="unityContainer" style="width: 960px; height: 600px"></div>
     </div>
   </body>
